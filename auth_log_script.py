@@ -35,13 +35,9 @@ with open("/var/log/auth.log", "r") as file:
         svrType = None
         msg = None
 
-        if "Failed" in line or "authentication failure" in line:
+        if "failed" in line.lower() or "authentication failure" in line.lower():
 
             now = time.time()
-
-            alrType = "Failed authentication"
-            svrType = "Low"
-            msg = "Failed login attempt detected"
 
             #only track attempts when an IP is available
             if srcIP:
@@ -54,14 +50,14 @@ with open("/var/log/auth.log", "r") as file:
                     failed_attempts[srcIP].popleft()
 
                 #check for repeated failed logins
-                if len(failed_attempts[srcIP]) > 5 and srcIP not in repeated_alert_sent:
+                if len(failed_attempts[srcIP]) >= 5 and srcIP not in repeated_alert_sent:
                     alrType = "Repeated Failed Logins"
                     svrType = "Medium"
-                    msg = "More than 5 failed authentication attempts from this IP in 60 seconds"
+                    msg = "5 or more failed authentication attempts from this IP in 60 seconds"
                     repeated_alert_sent.add(srcIP)
 
                 #check for SSH brute force
-                if "ssh" in line.lower():
+                if "sshd" in line.lower():
 
                     ssh_attempts[srcIP].append(now)
 
@@ -69,28 +65,18 @@ with open("/var/log/auth.log", "r") as file:
                     while ssh_attempts[srcIP] and now - ssh_attempts[srcIP][0] > 60:
                         ssh_attempts[srcIP].popleft()
 
-                    if len(ssh_attempts[srcIP]) > 15 and srcIP not in alerted_ips:
+                    if len(ssh_attempts[srcIP]) >= 15 and srcIP not in alerted_ips:
                         alrType = "SSH Brute Force"
                         svrType = "High"
-                        msg = "More than 15 failed SSH attempts in last minute"
+                        msg = "15 or more failed SSH attempts in 60 seconds"
                         alerted_ips.add(srcIP)
 
                 #reset alert flags once the count drops below the threshold
-                if len(failed_attempts[srcIP]) <= 5:
+                if len(failed_attempts[srcIP]) < 5:
                     repeated_alert_sent.discard(srcIP)
 
-                if len(ssh_attempts[srcIP]) <= 15:
+                if len(ssh_attempts[srcIP]) < 15:
                     alerted_ips.discard(srcIP)
-
-        elif "sshd" in line:
-            alrType = "SSH event"
-            svrType = "Low"
-            msg = "SSH activity detected"
-
-        elif "sudo" in line:
-            alrType = "Sudo event"
-            svrType = "Low"
-            msg = "Sudo activity detected"
 
         #export alert if one was generated
         if alrType is not None:
