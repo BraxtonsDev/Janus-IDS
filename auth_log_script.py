@@ -8,6 +8,7 @@ with open("/var/log/auth.log", "r") as file:
 
     file.seek(0, 2)
 
+<<<<<<< HEAD
     #track attempts separately for each IP
     ssh_attempts = defaultdict(deque)
     failed_attempts = defaultdict(deque)
@@ -15,6 +16,13 @@ with open("/var/log/auth.log", "r") as file:
     #track which IPs have already triggered alerts
     alerted_ips = set()
     repeated_alert_sent = set()
+=======
+    ssh_attempts = defaultdict(deque) #maintain active ssh attempts
+    failed_attempts = 0  # failed counter
+    alerted_ips = set() #set to track ip's
+    repeated_alert_sent = False
+    
+>>>>>>> b6c1678 (- Removed individual failed authentication alerts)
 
     while True:
         line = file.readline()
@@ -39,6 +47,7 @@ with open("/var/log/auth.log", "r") as file:
 
             now = time.time()
 
+<<<<<<< HEAD
             alrType = "Failed authentication"
             svrType = "Low"
             msg = "Failed login attempt detected"
@@ -91,6 +100,28 @@ with open("/var/log/auth.log", "r") as file:
             alrType = "Sudo event"
             svrType = "Low"
             msg = "Sudo activity detected"
+=======
+            # check now for brute force
+            if "ssh" in line and srcIP:
+                now = time.time() # pull time at detection
+                ssh_attempts[srcIP].append(now) # append to deque
+
+                #remove old ssh attempts > 60 sec
+                while ssh_attempts[srcIP] and now - ssh_attempts[srcIP][0] > 60: # pop ones that are > 60 sec old
+                    ssh_attempts[srcIP].popleft()
+
+                if len(ssh_attempts[srcIP]) > 15 and srcIP not in alerted_ips: # check if more than 15 attempts
+                    alrType = "SSH Brute Force"
+                    svrType = "High"
+                    msg = "More than 15 failed SSH attempts in last minute"
+                    alerted_ips.add(srcIP)
+            
+            elif failed_attempts > 5 and not repeated_alert_sent:
+                alrType = "Repeated Failed Logins"
+                svrType = "Medium"
+                msg = "More than 5 failed auth attempts"
+                repeated_alert_sent = True
+>>>>>>> b6c1678 (- Removed individual failed authentication alerts)
 
         #export alert if one was generated
         if alrType is not None:
