@@ -8,71 +8,106 @@ with open("/var/log/auth.log", "r") as file:
 
     file.seek(0, 2)
 
-    ssh_attempts = defaultdict(deque) #maintain active ssh attempts
-    failed_attempts = 0  # failed counter
-    alerted_ips = set() #set to track ip's
-    repeated_alert_sent = False
-    
+    #track attempts separately for each IP
+    ssh_attempts = defaultdict(deque)
+    failed_attempts = defaultdict(deque)
+
+    #track which IPs have already triggered alerts
+    alerted_ips = set()
+    repeated_alert_sent = set()
 
     while True:
-        line = file.readline()  # read line
+        line = file.readline()
 
-        if not line: # if no line, try again in 1
+        if not line:
             time.sleep(1)
             continue
 
-        ip = re.search(r"from (\S+)", line) # search for # after "from"
-        
-        if ip: # if exists, assign to srcIP
+        # get ip
+        ip = re.search(r"from (\S+)", line)
+
+        if ip:
             srcIP = ip.group(1)
-        else: # else null, some alerts wont state ip
+        else:
             srcIP = None
 
-        alrType = None # alert type
-        svrType = None  # severity type
-        msg = None #msg
+        alrType = None
+        svrType = None
+        msg = None
 
         if "Failed" in line or "authentication failure" in line:
 
-            failed_attempts += 1
+            now = time.time()
 
-            # check now for brute force
-            if "ssh" in line and srcIP:
-                now = time.time() # pull time at detection
-                ssh_attempts[srcIP].append(now) # append to deque
+            alrType = "Failed authentication"
+            svrType = "Low"
+            msg = "Failed login attempt detected"
 
-                #remove old ssh attempts > 60 sec
-                while ssh_attempts[srcIP] and now - ssh_attempts[srcIP][0] > 60: # pop ones that are > 60 sec old
-                    ssh_attempts[srcIP].popleft()
+            #only track attempts when an IP is available
+            if srcIP:
 
-                if len(ssh_attempts[srcIP]) > 15 and srcIP not in alerted_ips: # check if more than 15 attempts
-                    alrType = "SSH Brute Force"
-                    svrType = "High"
-                    msg = "More than 15 failed SSH attempts in last minute"
-                    alerted_ips.add(srcIP)
-            
-            elif failed_attempts > 5 and not repeated_alert_sent:
-                alrType = "Repeated Failed Logins"
-                svrType = "Medium"
-                msg = "More than 5 failed auth attempts"
-                repeated_alert_sent = True
+                #track all failed authentication attempts for this IP
+                failed_attempts[srcIP].append(now)
 
+                #remove attempts older than 60 seconds
+                while failed_attempts[srcIP] and now - failed_attempts[srcIP][0] > 60:
+                    failed_attempts[srcIP].popleft()
 
-        if alrType is not None: # if alrType has been changed, just a final check
+                #check for repeated failed logins
+                if len(failed_attempts[srcIP]) > 5 and srcIP not in repeated_alert_sent:
+                    alrType = "Repeated Failed Logins"
+                    svrType = "Medium"
+                    msg = "More than 5 failed authentication attempts from this IP in 60 seconds"
+                    repeated_alert_sent.add(srcIP)
+
+                #check for SSH brute force
+                if "ssh" in line.lower():
+
+                    ssh_attempts[srcIP].append(now)
+
+                    #remove SSH attempts older than 60 seconds
+                    while ssh_attempts[srcIP] and now - ssh_attempts[srcIP][0] > 60:
+                        ssh_attempts[srcIP].popleft()
+
+                    if len(ssh_attempts[srcIP]) > 15 and srcIP not in alerted_ips:
+                        alrType = "SSH Brute Force"
+                        svrType = "High"
+                        msg = "More than 15 failed SSH attempts in last minute"
+                        alerted_ips.add(srcIP)
+
+                #reset alert flags once the count drops below the threshold
+                if len(failed_attempts[srcIP]) <= 5:
+                    repeated_alert_sent.discard(srcIP)
+
+                if len(ssh_attempts[srcIP]) <= 15:
+                    alerted_ips.discard(srcIP)
+
+        elif "sshd" in line:
+            alrType = "SSH event"
+            svrType = "Low"
+            msg = "SSH activity detected"
+
+        elif "sudo" in line:
+            alrType = "Sudo event"
+            svrType = "Low"
+            msg = "Sudo activity detected"
+
+        #export alert if one was generated
+        if alrType is not None:
 
             alert = {
-            "source": "auth.log",
-            "source_ip": srcIP,
-            "alert_type": alrType,
-            "severity": svrType,
-            "message": msg,
-            "raw_log": line.strip(),
-            "time": int(time.time())
-
+                "source": "auth.log",
+                "source_ip": srcIP,
+                "alert_type": alrType,
+                "severity": svrType,
+                "message": msg,
+                "raw_log": line.strip(),
+                "time": int(time.time())
             }
 
-            # Save each alert to the JSON files
+            #save each alert to the JSONL file
             with open("auth_alerts.jsonl", "a") as output:
                 output.write(json.dumps(alert) + "\n")
+
 
             
