@@ -24,7 +24,6 @@ with open(eveLogPath, "r") as f, open("network_alerts.jsonl", "a") as output:
             time.sleep(0.5)
             continue
 
-
         try:
             data = json.loads(line)
         except json.decoder.JSONDecodeError:
@@ -39,10 +38,6 @@ with open(eveLogPath, "r") as f, open("network_alerts.jsonl", "a") as output:
         destPort = data.get("dest_port", None)
         if destPort is not None:
             destPort = int(destPort)
-
-        # alrType = None
-        # svrType = None
-        # msg = None
 
         alerts = []
 
@@ -86,15 +81,6 @@ with open(eveLogPath, "r") as f, open("network_alerts.jsonl", "a") as output:
                         "severity": 2,
                         "message": f"Outbound connection on unusual port: {destPort}"
                     })
-
-                #Scanning multiple ports
-                # elif destPort is not None:
-                #     port_scan_tracker[srcIP].add(destPort)
-                #     if len(port_scan_tracker[srcIP]) > 30 and srcIP not in already_flagged_scanners:
-                #         already_flagged_scanners.add(srcIP)
-                #         alrType = "Port scanning"
-                #         svrType = 2
-                #         msg = f"{len(port_scan_tracker[srcIP])} ports scanned by {srcIP}"
                 
                 # Scanning multiple ports
                 if destPort is not None:
@@ -140,3 +126,4 @@ with open(eveLogPath, "r") as f, open("network_alerts.jsonl", "a") as output:
                 "time": data.get("timestamp")
             }
             output.write(json.dumps(alert) + "\n")
+            output.flush() #Update and write to file immediately
