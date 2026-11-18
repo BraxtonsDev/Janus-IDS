@@ -30,7 +30,7 @@ with open(eveLogPath, "r") as f, open("network_alerts.jsonl", "a") as output:
             continue
 
         eventType = data.get("event_type")
-        if eventType not in ("alert", "dns", "flow"):
+        if eventType not in ("dns", "flow"):
             continue
 
         srcIP = data.get("src_ip", None)
@@ -42,14 +42,6 @@ with open(eveLogPath, "r") as f, open("network_alerts.jsonl", "a") as output:
         alerts = []
 
         match eventType:
-            case "alert":
-                dataInfo = data.get("alert", {})
-                alerts.append({
-                    "alert_type": dataInfo.get("category", "Suricata Alert"),
-                    "severity": dataInfo.get("severity", 1),
-                    "message": dataInfo.get("signature", "unknown")
-                })
-
             case "dns":
                 dataInfo = data.get("dns",{})
 
@@ -66,7 +58,6 @@ with open(eveLogPath, "r") as f, open("network_alerts.jsonl", "a") as output:
             case "flow":
                 flowInfo = data.get("flow", {})
 
-                #Flagged IP
                 if destIp in BLOCKED_IPS:
                     alerts.append({
                         "alert_type": "Suspicious outbound traffic",
@@ -74,7 +65,6 @@ with open(eveLogPath, "r") as f, open("network_alerts.jsonl", "a") as output:
                         "message": f"Connection to flagged IP: {destIp}"
                     })
 
-                #Odd port use
                 if destPort in UNUSUAL_PORTS:
                     alerts.append({
                         "alert_type": "Unused ports",
