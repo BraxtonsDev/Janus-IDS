@@ -3,12 +3,13 @@ import time
 from collections import defaultdict
 
 eveLogPath = "/var/log/suricata/eve.json"
+RECHECK_TIMEOUT_SECONDS = 300  # 5 minutes
 
 port_scan_tracker = defaultdict(dict)
-already_flagged_scanners = set()
+flagged_scanners = {}  # src_ip -> timestamp of last port-scan alert
 
 failed_conn_tracker = defaultdict(int)
-already_flagged_probers = set()
+flagged_probers = {}   # src_ip -> timestamp of last prober alert
 
 BLOCKED_DOMAINS = {"malicious.com", "badsite.org", "crypto-miner.net"}
 BLOCKED_IPS = {"192.0.2.99", "203.0.113.50"}
@@ -39,13 +40,14 @@ with open(eveLogPath, "r") as f, open("network_alerts.jsonl", "a") as output:
         if destPort is not None:
             destPort = int(destPort)
 
+        current_time = time.time()
         alerts = []
 
         match eventType:
             case "dns":
-                dataInfo = data.get("dns",{})
+                dataInfo = data.get("dns", {})
 
-                #Blocked Domain
+                # Blocked Domain
                 domain = dataInfo.get("rrname", "").lower().rstrip(".")
 
                 if domain in BLOCKED_DOMAINS:
@@ -71,11 +73,9 @@ with open(eveLogPath, "r") as f, open("network_alerts.jsonl", "a") as output:
                         "severity": 2,
                         "message": f"Outbound connection on unusual port: {destPort}"
                     })
-                
-                # Scanning multiple ports
-                if destPort is not None:
-                    current_time = time.time()
 
+                # Scanning multiple ports (recheck allowed every 5 minutes)
+                if destPort is not None and srcIP is not None:
                     port_scan_tracker[srcIP][destPort] = current_time
 
                     # Remove ports older than 60 seconds
@@ -85,24 +85,42 @@ with open(eveLogPath, "r") as f, open("network_alerts.jsonl", "a") as output:
                         if current_time - timestamp <= 60
                     }
 
-                    if len(port_scan_tracker[srcIP]) > 30 and srcIP not in already_flagged_scanners:
-                        already_flagged_scanners.add(srcIP)
+                    last_scan_alert = flagged_scanners.get(srcIP)
+                    can_alert_scan = (
+                        last_scan_alert is None
+                        or (current_time - last_scan_alert) >= RECHECK_TIMEOUT_SECONDS
+                    )
+
+                    if len(port_scan_tracker[srcIP]) > 30 and can_alert_scan:
+                        flagged_scanners[srcIP] = current_time
                         alerts.append({
                             "alert_type": "Port scanning",
                             "severity": 2,
                             "message": f"{len(port_scan_tracker[srcIP])} ports scanned by {srcIP}"
                         })
 
-                #Repeated connection attempts
-                if flowInfo.get("reason") == "timeout" and flowInfo.get("pkts_toclient") == 0:
+                # Repeated connection attempts (recheck allowed every 5 minutes)
+                if (
+                    srcIP is not None
+                    and flowInfo.get("reason") == "timeout"
+                    and flowInfo.get("pkts_toclient") == 0
+                ):
                     failed_conn_tracker[srcIP] += 1
 
-                    if failed_conn_tracker[srcIP] >= 20 and srcIP not in already_flagged_probers:
-                        already_flagged_probers.add(srcIP)
+                    last_probe_alert = flagged_probers.get(srcIP)
+                    can_alert_probe = (
+                        last_probe_alert is None
+                        or (current_time - last_probe_alert) >= RECHECK_TIMEOUT_SECONDS
+                    )
+
+                    if failed_conn_tracker[srcIP] >= 20 and can_alert_probe:
+                        flagged_probers[srcIP] = current_time
+                        count_at_alert = failed_conn_tracker[srcIP]
+                        failed_conn_tracker[srcIP] = 0  # Require 20 new timeouts for the next alert
                         alerts.append({
                             "alert_type": "Repeated connection attempts",
                             "severity": 2,
-                            "message": f"Possible service probing: {failed_conn_tracker[srcIP]}"
+                            "message": f"Possible service probing: {count_at_alert}"
                         })
 
         for alertInfo in alerts:
@@ -116,4 +134,4 @@ with open(eveLogPath, "r") as f, open("network_alerts.jsonl", "a") as output:
                 "time": data.get("timestamp")
             }
             output.write(json.dumps(alert) + "\n")
-            output.flush() #Update and write to file immediately
+            output.flush()  # Update and write to file immediately
