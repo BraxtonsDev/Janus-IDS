@@ -1,15 +1,20 @@
 import json
 import time
-from collections import defaultdict
-
+from collections import defaultdict, deque
 eveLogPath = "/var/log/suricata/eve.json"
+
 RECHECK_TIMEOUT_SECONDS = 300  # 5 minutes
+ICMP_FLOOD_WINDOW_SECONDS = 10
+ICMP_FLOOD_THRESHOLD = 100     # ICMP packets from one src_ip within the window
 
 port_scan_tracker = defaultdict(dict)
 flagged_scanners = {}  # src_ip -> timestamp of last port-scan alert
 
 failed_conn_tracker = defaultdict(int)
 flagged_probers = {}   # src_ip -> timestamp of last prober alert
+
+icmp_flood_tracker = defaultdict(deque)  # src_ip -> deque of (timestamp, pkts_toserver)
+flagged_icmp_flooders = {}               # src_ip -> timestamp of last ICMP flood alert
 
 BLOCKED_DOMAINS = {"malicious.com", "badsite.org", "crypto-miner.net"}
 BLOCKED_IPS = {"192.0.2.99", "203.0.113.50"}
@@ -121,6 +126,36 @@ with open(eveLogPath, "r") as f, open("network_alerts.jsonl", "a") as output:
                             "alert_type": "Repeated connection attempts",
                             "severity": 2,
                             "message": f"Possible service probing: {count_at_alert}"
+                        })
+
+                # ICMP flood detection (recheck allowed every 5 minutes)
+                proto = (data.get("proto") or "").upper()
+                if proto in ("ICMP", "IPV6-ICMP") and srcIP is not None:
+                    pkts = flowInfo.get("pkts_toserver")
+                    if pkts is None:
+                        pkts = 1
+                    icmp_flood_tracker[srcIP].append((current_time, pkts))
+                    # Drop entries older than the sliding window
+                    while (
+                        icmp_flood_tracker[srcIP]
+                        and current_time - icmp_flood_tracker[srcIP][0][0] > ICMP_FLOOD_WINDOW_SECONDS
+                    ):
+                        icmp_flood_tracker[srcIP].popleft()
+                    total_icmp_pkts = sum(count for _, count in icmp_flood_tracker[srcIP])
+                    last_icmp_alert = flagged_icmp_flooders.get(srcIP)
+                    can_alert_icmp = (
+                        last_icmp_alert is None
+                        or (current_time - last_icmp_alert) >= RECHECK_TIMEOUT_SECONDS
+                    )
+                    if total_icmp_pkts >= ICMP_FLOOD_THRESHOLD and can_alert_icmp:
+                        flagged_icmp_flooders[srcIP] = current_time
+                        alerts.append({
+                            "alert_type": "ICMP flood",
+                            "severity": 1,
+                            "message": (
+                                f"Possible ICMP flood from {srcIP}: "
+                                f"{total_icmp_pkts} packets in {ICMP_FLOOD_WINDOW_SECONDS}s"
+                            )
                         })
 
         for alertInfo in alerts:
