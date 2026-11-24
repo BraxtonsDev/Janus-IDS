@@ -7,8 +7,6 @@ from datetime import datetime, timezone
 TIME_WINDOW_MINUTES = 60
 EVE_LOG_PATH = "/var/log/suricata/eve.json"
 OUTPUT_FILE = "traffic_stats.json"
-POLL_INTERVAL_SECONDS = 0.5  # Seconds to sleep when there are no new log lines.
-WRITE_INTERVAL_SECONDS = 1   # Seconds between writes of the statistics file.
 WINDOW_SECONDS = TIME_WINDOW_MINUTES * 60
 
 
@@ -22,8 +20,10 @@ def process_event(event, records, flows, now):
         return
 
     flow = event["flow"]
-    current = (flow.get("bytes_toserver", 0), flow.get("pkts_toserver", 0),
-               flow.get("bytes_toclient", 0), flow.get("pkts_toclient", 0))
+    current = (flow.get("bytes_toserver", 0), 
+               flow.get("pkts_toserver", 0),
+               flow.get("bytes_toclient", 0), 
+               flow.get("pkts_toclient", 0))
 
     flow_id = event.get("flow_id")
     previous = (0, 0, 0, 0)
@@ -77,8 +77,7 @@ def build_snapshot(records, now):
 
 
 def write_stats(stats):
-    # Write to a temp file, then swap it in. os.replace() is atomic, so the
-    # GUI always sees either the old complete file or the new complete file.
+    # Write to a temp file, then swap it in.
     temp_path = OUTPUT_FILE + ".tmp"
     with open(temp_path, "w", encoding="utf-8") as temp_file:
         json.dump(stats, temp_file, indent=2)
@@ -93,7 +92,7 @@ def open_log(seek_to_end):
 
 
 def log_was_rotated(log_file, inode):
-    """Detect log rotation (new file) or truncation (file shrank)."""
+    # Detect log rotation (new file) or truncation (file shrank).
     try:
         stat = os.stat(EVE_LOG_PATH)
     except FileNotFoundError:
@@ -101,7 +100,6 @@ def log_was_rotated(log_file, inode):
     return stat.st_ino != inode or stat.st_size < log_file.tell()
 
 
-# Main loop: follow eve.json and keep traffic_stats.json up to date.
 def monitor():
     records = []  # (time, ip, bytes, packets), oldest first
     flows = {}    # flow_id -> (counters, last_seen)
@@ -122,8 +120,7 @@ def monitor():
             chunk = log_file.readline()
 
             if chunk:
-                # A line without a newline is still being written; keep it
-                # until the rest arrives instead of parsing half a JSON object.
+                # A line without a \n is still being written; keep it until the rest arrives
                 if not chunk.endswith("\n"):
                     partial_line += chunk
                     continue
@@ -142,12 +139,12 @@ def monitor():
                     log_file, inode = open_log(seek_to_end=False)
                     partial_line = ""
                     continue
-                time.sleep(POLL_INTERVAL_SECONDS)
+                time.sleep(1) # Seconds to sleep when there are no new log lines.
 
             # Drop expired data and rewrite the file on a fixed interval, even
             # without new events, so old traffic disappears from the GUI.
             now = time.time()
-            if now - last_write >= WRITE_INTERVAL_SECONDS:
+            if now - last_write >= 1: # Seconds between writes of the statistics file.
                 cutoff = now - WINDOW_SECONDS
                 records = [r for r in records if r[0] >= cutoff]
                 flows = {fid: f for fid, f in flows.items() if f[1] >= cutoff}
@@ -161,6 +158,6 @@ if __name__ == "__main__":
     try:
         monitor()
     except FileNotFoundError:
-        print(f"[!] Log file not found: {EVE_LOG_PATH}")
+        print(f"Log file not found: {EVE_LOG_PATH}")
     except PermissionError:
-        print(f"[!] Permission denied reading {EVE_LOG_PATH} (try sudo)")
+        print(f"Permission denied reading {EVE_LOG_PATH} (try sudo)")
