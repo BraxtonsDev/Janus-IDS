@@ -1,4 +1,3 @@
-from multiprocessing import process
 import os
 import shutil
 import subprocess
@@ -56,28 +55,44 @@ def wait_for_eve():
     print("eve.json never loaded")
     sys.exit(1)
 
-def start_logger(script):
+def start_logger(script, user=None):
     check = subprocess.run(["pgrep", "-f", script], capture_output=True)
     if check.returncode == 0:
         print(script, " is already running.")
         return
 
-    print("Starting ", script)
-    subprocess.Popen([sys.executable, script]) #normally I would put the full command python3 scriptname whatever, but sys just uses whatever python is running this script
+    print("Starting", script)
+    process = subprocess.Popen([sys.executable, script], user=user) #normally I would put the full command python3 scriptname whatever, but sys just uses whatever python is running this script
 
     time.sleep(2)
     if process.poll() is not None: #poll returns none if the process is still running, otherwise it prints to run it manually
         print(script, " failed to start. Run " + script + " manually to see the error.")
 
 def ensure_auth_log_script():
-    if not os.path.exists("/var//log/auth.log"):
+    if not os.path.exists("/var/log/auth.log"):
         subprocess.run(["apt-get", "install", "-y", "rsyslog"], check=True)
         subprocess.run(["systemctl", "enable", "--now", "rsyslog"], check=True)
     
-    if not os.path.exists("/var/log/auth.log"):
-        open("/var/log/auth.log", "a").close()
+    subprocess.run(["logger", "-p", "auth.info", "Janus setup"]) #gets auth.log up and moving if it aint already with a custom msg (is handy for testing on kali)
+    time.sleep(1)
+
+def install_gui_dependencies():
+    try:
+        import customtkinter
+        return
+    except ImportError:
+        pass
+
+    print("Installing GUI dependencies...")
+    subprocess.run(["apt-get", "install", "-y", "python3-tk", "python3-pip"], check=True)
+    subprocess.run([sys.executable, "-m", "pip", "install", "--break-system-packages", "customtkinter"], check=True) #breaksystempackages lets newer debian systems run pip install
 
 def main():
+    if sys.version_info < (3, 10):
+        print("Python 3.10 or higher is required.")
+        sys.exit(1)
+
+    os.chdir(os.path.dirname(os.path.abspath(__file__))) #changes working directory to the script's directory so it can find the other scripts
     check_root()
 
     if suricata_installed():
@@ -87,20 +102,19 @@ def main():
         print("Suricata installed, checking interface...")
 
     interface = get_interface()
-    print("Detected ", interface)
+    print("Detected", interface)
 
     start_suricata(interface)
 
     wait_for_eve()
 
     ensure_auth_log_script()
+    install_gui_dependencies()
+
     start_logger("auth_log_script.py")
     start_logger("eve_log_script.py")
+    start_logger("traffic_monitor.py")
+    start_logger("dashboard.py", user=os.environ.get("SUDO_USER")) #gets the user that ran sudo
 
 if __name__ == "__main__":
     main()
-
-#For now until GUI is done we'll just tail the
-#network logs in a different terminal 
-#tail -f auth_alerts.jsonl
-#tail -f network_alerts.jsonl
