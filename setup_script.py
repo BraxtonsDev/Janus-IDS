@@ -1,3 +1,4 @@
+from multiprocessing import process
 import os
 import shutil
 import subprocess
@@ -64,6 +65,18 @@ def start_logger(script):
     print("Starting ", script)
     subprocess.Popen([sys.executable, script]) #normally I would put the full command python3 scriptname whatever, but sys just uses whatever python is running this script
 
+    time.sleep(2)
+    if process.poll() is not None: #poll returns none if the process is still running, otherwise it prints to run it manually
+        print(script, " failed to start. Run " + script + " manually to see the error.")
+
+def ensure_auth_log_script():
+    if not os.path.exists("/var//log/auth.log"):
+        subprocess.run(["apt-get", "install", "-y", "rsyslog"], check=True)
+        subprocess.run(["systemctl", "enable", "--now", "rsyslog"], check=True)
+    
+    if not os.path.exists("/var/log/auth.log"):
+        open("/var/log/auth.log", "a").close()
+
 def main():
     check_root()
 
@@ -80,10 +93,12 @@ def main():
 
     wait_for_eve()
 
+    ensure_auth_log_script()
     start_logger("auth_log_script.py")
     start_logger("eve_log_script.py")
 
-main()
+if __name__ == "__main__":
+    main()
 
 #For now until GUI is done we'll just tail the
 #network logs in a different terminal 
